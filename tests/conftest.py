@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from loguru import logger
 
+from mcp_logbench.config import AxiomConfig, AxiomSourceConfig
+
 if TYPE_CHECKING:
     from collections.abc import Generator
 
@@ -25,6 +27,29 @@ def valid_config_data() -> dict[str, Any]:
             ],
         },
     }
+
+
+@pytest.fixture
+def axiom_config() -> AxiomConfig:
+    """AxiomConfig with two sources for multi-source testing."""
+    return AxiomConfig(
+        sources=[
+            AxiomSourceConfig(
+                name="production",
+                url="https://axiom-prod.example.com",
+                token="prod-secret-token",
+                org_id="org-prod",
+                datasets=["app-logs", "system-logs"],
+            ),
+            AxiomSourceConfig(
+                name="staging",
+                url="https://axiom-staging.example.com",
+                token="staging-secret-token",
+                org_id="org-staging",
+                datasets=["staging-logs"],
+            ),
+        ]
+    )
 
 
 @pytest.fixture
