@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from loguru import logger
 
-from mcp_logbench.config import AxiomConfig, AxiomSourceConfig
+from mcp_logbench.config import AppConfig, AxiomConfig, AxiomSourceConfig
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -53,10 +53,16 @@ def axiom_config() -> AxiomConfig:
 
 
 @pytest.fixture
+def app_config(axiom_config: AxiomConfig) -> AppConfig:
+    """Full AppConfig for server tests."""
+    return AppConfig(axiom=axiom_config)
+
+
+@pytest.fixture
 def log_sink() -> Generator[list[str]]:
     """Capture Loguru output. Use instead of caplog (incompatible with Loguru)."""
     messages: list[str] = []
     logger.remove()
-    logger.add(lambda m: messages.append(str(m)), format="{message}", level="DEBUG")
+    logger.add(lambda m: messages.append(str(m)), format="{message} {extra}", level="DEBUG")
     yield messages
     logger.remove()
