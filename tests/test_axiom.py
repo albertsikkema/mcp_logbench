@@ -449,3 +449,84 @@ async def test_dataset_with_hyphens_resolves(axiom_config: AxiomConfig) -> None:
     async with AxiomClient(axiom_config) as client:
         source = client._resolve_dataset("system-logs")
     assert source.name == "production"
+
+
+# --- Security / audit logging ---
+
+
+async def test_dataset_not_found_logs_warning(
+    axiom_config: AxiomConfig,
+    log_sink: list[str],
+) -> None:
+    async with AxiomClient(axiom_config) as client:
+        with pytest.raises(DatasetNotFoundError):
+            await client.get_dataset_schema("nonexistent")
+
+    assert any("nonexistent" in msg for msg in log_sink)
+
+
+async def test_list_datasets_partial_source_failure(
+    axiom_config: AxiomConfig,
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.get("https://axiom-prod.example.com/v1/datasets").respond(
+        500, json={"error": "unavailable"}
+    )
+    respx_mock.get("https://axiom-staging.example.com/v1/datasets").respond(
+        200,
+        json=[{"name": "staging-logs", "description": ""}],
+    )
+
+    async with AxiomClient(axiom_config) as client:
+        result = await client.list_datasets()
+
+    names = [d.name for d in result]
+    assert "staging-logs" in names
+
+
+async def test_malformed_json_on_200_raises_axiom_api_error(
+    axiom_config: AxiomConfig,
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.get("https://axiom-prod.example.com/v1/datasets/app-logs").respond(
+        200, content=b"not json"
+    )
+
+    async with AxiomClient(axiom_config) as client:
+        with pytest.raises(AxiomAPIError, match="malformed response"):
+            await client.get_dataset_schema("app-logs")
+
+
+async def test_query_apl_truncation_logged(
+    axiom_config: AxiomConfig,
+    respx_mock: respx.MockRouter,
+    log_sink: list[str],
+) -> None:
+    rows = [["row"] for _ in range(1001)]
+    respx_mock.post("https://axiom-prod.example.com/v1/datasets/_apl").respond(
+        200,
+        json=_make_tabular_response(columns=["data"], rows=rows),
+    )
+
+    async with AxiomClient(axiom_config) as client:
+        result = await client.query_apl("app-logs", "['app-logs'] | where _time > ago(1h)")
+
+    assert result.has_more is True
+    assert any("truncated" in msg for msg in log_sink)
+
+
+async def test_request_error_detail_in_log(
+    axiom_config: AxiomConfig,
+    respx_mock: respx.MockRouter,
+    log_sink: list[str],
+) -> None:
+    respx_mock.get("https://axiom-prod.example.com/v1/datasets/app-logs").mock(
+        side_effect=httpx.ConnectError("connection refused by host")
+    )
+
+    async with AxiomClient(axiom_config) as client:
+        with pytest.raises(AxiomConnectionError):
+            await client.get_dataset_schema("app-logs")
+
+    all_logs = " ".join(log_sink)
+    assert "connection refused by host" in all_logs

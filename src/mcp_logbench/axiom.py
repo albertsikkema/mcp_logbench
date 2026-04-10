@@ -74,6 +74,7 @@ class AxiomClient:
     def _resolve_dataset(self, dataset: str) -> AxiomSourceConfig:
         source = self._dataset_map.get(dataset)
         if source is None:
+            logger.warning("Dataset access denied: '{dataset}' not in allowlist", dataset=dataset)
             raise DatasetNotFoundError(
                 f"Dataset '{dataset}' is not in the configured allowlist"
             )
@@ -96,11 +97,32 @@ class AxiomClient:
                 )
                 resp.raise_for_status()
             except httpx.HTTPStatusError as e:
-                raise self._translate_api_error(e, source.name) from None
+                err = self._translate_api_error(e, source.name)
+                logger.warning(
+                    "Skipping source '{source}' in list_datasets: {error}",
+                    source=source.name,
+                    error=str(err),
+                )
+                continue
             except httpx.RequestError as e:
-                raise self._translate_request_error(e, source.name) from None
+                err = self._translate_request_error(e, source.name)
+                logger.warning(
+                    "Skipping source '{source}' in list_datasets: {error}",
+                    source=source.name,
+                    error=str(err),
+                )
+                continue
 
-            for ds in resp.json():
+            try:
+                data = resp.json()
+            except Exception:
+                logger.warning(
+                    "Skipping source '{source}' in list_datasets: malformed JSON response",
+                    source=source.name,
+                )
+                continue
+
+            for ds in data:
                 if ds["name"] in source.datasets:
                     results.append(
                         DatasetInfo(
@@ -120,11 +142,23 @@ class AxiomClient:
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
-            raise self._translate_api_error(e, source.name) from None
+            raise self._translate_api_error(e, source.name) from e
         except httpx.RequestError as e:
-            raise self._translate_request_error(e, source.name) from None
+            raise self._translate_request_error(e, source.name) from e
 
-        data = resp.json()
+        try:
+            data = resp.json()
+        except Exception as e:
+            logger.error(
+                "Axiom returned malformed JSON: source={source} status={status}",
+                source=source.name,
+                status=resp.status_code,
+            )
+            raise AxiomAPIError(
+                f"Axiom source '{source.name}' returned malformed response",
+                status_code=resp.status_code,
+            ) from e
+
         fields = [FieldInfo(name=f["name"], type=f["type"]) for f in data.get("fields", [])]
         return DatasetSchema(dataset=dataset, fields=fields)
 
@@ -149,11 +183,24 @@ class AxiomClient:
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
-            raise self._translate_api_error(e, source.name) from None
+            raise self._translate_api_error(e, source.name) from e
         except httpx.RequestError as e:
-            raise self._translate_request_error(e, source.name) from None
+            raise self._translate_request_error(e, source.name) from e
 
-        return self._parse_query_response(resp.json())
+        try:
+            data = resp.json()
+        except Exception as e:
+            logger.error(
+                "Axiom returned malformed JSON: source={source} status={status}",
+                source=source.name,
+                status=resp.status_code,
+            )
+            raise AxiomAPIError(
+                f"Axiom source '{source.name}' returned malformed response",
+                status_code=resp.status_code,
+            ) from e
+
+        return self._parse_query_response(data)
 
     @staticmethod
     def _apply_time_default(apl: str) -> str:
@@ -173,6 +220,11 @@ class AxiomClient:
         all_rows = table.get("rows") or []
 
         has_more = len(all_rows) > _DEFAULT_MAX_RESULTS
+        if has_more:
+            logger.warning(
+                "Query result truncated to {limit} rows; has_more=True",
+                limit=_DEFAULT_MAX_RESULTS,
+            )
         rows = all_rows[:_DEFAULT_MAX_RESULTS]
 
         status = data.get("status", {})
@@ -207,9 +259,10 @@ class AxiomClient:
     ) -> AxiomConnectionError:
         error_type = type(exc).__name__
         logger.error(
-            "Axiom connection error: source={source} type={error_type}",
+            "Axiom connection error: source={source} type={error_type} detail={detail}",
             source=source_name,
             error_type=error_type,
+            detail=str(exc),
         )
         if isinstance(exc, httpx.ReadTimeout):
             msg = f"Axiom query timed out on source '{source_name}'"

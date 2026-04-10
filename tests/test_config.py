@@ -174,6 +174,22 @@ axiom:
         load_config(cfg_path)
 
 
+def test_dataset_name_with_invalid_chars_rejected(tmp_path: Path) -> None:
+    cfg_path = write_yaml(
+        tmp_path,
+        """
+axiom:
+  sources:
+    - name: prod
+      token: tok
+      org_id: org-1
+      datasets: ["../etc/passwd"]
+""",
+    )
+    with pytest.raises(ConfigError, match="validation failed"):
+        load_config(cfg_path)
+
+
 def test_source_name_validation(tmp_path: Path) -> None:
     cfg_path = write_yaml(
         tmp_path,
