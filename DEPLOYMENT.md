@@ -23,6 +23,11 @@ cp config.example.yaml config.yaml
 # Leave token values as ${VAR_NAME} references
 ```
 
+> **Important:** `server.host` in your config must be `0.0.0.0`, not `127.0.0.1` or
+> `localhost`. Inside the container, the application binds to that address. If you
+> bind to loopback only, Docker cannot forward traffic from the host port and the
+> container will be unreachable.
+
 ## Running the Container
 
 ```bash
