@@ -1,0 +1,31 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+axiom:
+  sources:
+    - name: production
+      url: "https://api.axiom.co"
+      token: "${AXIOM_PROD_TOKEN}"
+      org_id: "your-org-id"
+      datasets:
+        - app-logs
+        - system-logs
+
+    - name: staging
+      url: "https://api.axiom.co"
+      token: "${AXIOM_STAGING_TOKEN}"
+      org_id: "your-staging-org-id"
+      datasets:
+        - staging-logs
+
+  rate_limit:
+    queries_per_minute: 10
+    burst: 3
+
+auth:
+  provider: azure_entra
+  tenant_id: "${AZURE_TENANT_ID}"
+  client_id: "${AZURE_CLIENT_ID}"
+  required_scope: "api://your-app-id/.default"
+  required_groups: []
