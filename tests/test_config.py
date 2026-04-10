@@ -320,6 +320,26 @@ auth:
         load_config(cfg_path)
 
 
+def test_auth_base_url_must_be_https(tmp_path: Path) -> None:
+    cfg_path = write_yaml(
+        tmp_path,
+        """
+axiom:
+  sources:
+    - name: prod
+      token: tok
+      org_id: org-1
+      datasets: [logs]
+auth:
+  tenant_id: "my-tenant"
+  client_id: "my-client"
+  base_url: "http://server.example.com"
+""",
+    )
+    with pytest.raises(ConfigError, match="validation failed"):
+        load_config(cfg_path)
+
+
 def test_config_path_from_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg_path = write_yaml(
         tmp_path,

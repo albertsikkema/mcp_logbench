@@ -322,6 +322,105 @@ async def test_auth_disabled_anonymous(
     assert "anonymous" in audit_lines[0]
 
 
+# --- Security fix regression tests ---
+
+
+async def test_group_denial_is_audit_logged(
+    auth_app_config_with_groups: AppConfig,
+    rsa_key_pair: RSAKeyPair,
+    make_token,
+    log_sink: list[str],
+) -> None:
+    """Group denial must appear in audit log (finding: denial not audit-logged)."""
+    app = build_auth_http_app(auth_app_config_with_groups, rsa_key_pair)
+    token = make_token(groups=["other-group"])  # not in required group
+
+    with TestClient(app):
+        transport = StreamableHttpTransport(
+            url="http://testserver/mcp",
+            auth=token,
+            httpx_client_factory=_asgi_client_factory(app),
+        )
+        async with Client(transport) as client:
+            with pytest.raises(ToolError, match="Access denied"):
+                await client.call_tool("list_datasets", {})
+
+    audit_lines = [m for m in log_sink if "audit" in m]
+    assert len(audit_lines) >= 1, "Denied request must produce an audit log entry"
+
+
+async def test_string_groups_claim_no_bypass(
+    axiom_config,
+    rsa_key_pair: RSAKeyPair,
+    make_token,
+) -> None:
+    """String groups claim must not bypass group check via character iteration.
+
+    Old code: set("admin") contains 'a', so required_groups=["a"] would grant
+    access via character-level intersection. New code: string is wrapped as
+    ["admin"], which does not match ["a"].
+    """
+    from mcp_logbench.config import AppConfig, AuthConfig
+
+    cfg = AppConfig(
+        axiom=axiom_config,
+        auth=AuthConfig(
+            tenant_id="test-tenant-id",
+            client_id="test-client-id",
+            base_url="https://test-server.example.com",
+            required_groups=["a"],  # single char -- old code would match 'a' in "admin"
+        ),
+    )
+    app = build_auth_http_app(cfg, rsa_key_pair)
+    # groups claim is the string "admin" -- character 'a' is in it, but "admin" != "a"
+    token = make_token(extra_claims={"groups": "admin"})
+
+    with TestClient(app):
+        transport = StreamableHttpTransport(
+            url="http://testserver/mcp",
+            auth=token,
+            httpx_client_factory=_asgi_client_factory(app),
+        )
+        async with Client(transport) as client:
+            with pytest.raises(ToolError, match="Access denied"):
+                await client.call_tool("list_datasets", {})
+
+
+async def test_oid_sanitized_in_audit_log(
+    auth_app_config: AppConfig,
+    rsa_key_pair: RSAKeyPair,
+    make_token,
+    log_sink: list[str],
+    respx_mock: respx.MockRouter,
+) -> None:
+    """OID with control characters must be sanitized before audit log."""
+    respx_mock.get("https://axiom-prod.example.com/v1/datasets").respond(
+        200, json=[{"name": "app-logs", "description": "App"}]
+    )
+    respx_mock.get("https://axiom-staging.example.com/v1/datasets").respond(
+        200, json=[{"name": "staging-logs", "description": "Staging"}]
+    )
+
+    app = build_auth_http_app(auth_app_config, rsa_key_pair)
+    # OID containing a newline (log injection attempt)
+    token = make_token(oid="evil\ninjected-line")
+
+    with TestClient(app):
+        transport = StreamableHttpTransport(
+            url="http://testserver/mcp",
+            auth=token,
+            httpx_client_factory=_asgi_client_factory(app),
+        )
+        async with Client(transport) as client:
+            await client.call_tool("list_datasets", {})
+
+    audit_lines = [m for m in log_sink if "audit" in m]
+    assert len(audit_lines) >= 1
+    # The control char (\n) must have been replaced; the oid value in the log
+    # must not contain a literal newline (only the trailing line-end \n is OK)
+    assert "evil\ninjected-line" not in audit_lines[0], "Raw newline in oid must be sanitized"
+
+
 # --- OAuth metadata advertisement ---
 
 

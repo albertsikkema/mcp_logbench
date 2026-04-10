@@ -117,6 +117,13 @@ class AuthConfig(BaseModel):
     required_scope: str | None = None
     required_groups: list[str] = []
 
+    @field_validator("base_url")
+    @classmethod
+    def base_url_must_be_https(cls, v: str) -> str:
+        if v and not v.startswith("https://"):
+            raise ValueError("base_url must use HTTPS")
+        return v
+
     @model_validator(mode="after")
     def auth_fields_consistent(self) -> Self:
         has_tenant = bool(self.tenant_id)

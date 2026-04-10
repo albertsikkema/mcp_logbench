@@ -19,6 +19,7 @@ from mcp_logbench.axiom import (
     AxiomError,
     DatasetNotFoundError,
 )
+from mcp_logbench.config import ConfigError
 from mcp_logbench.rate_limit import RateLimiter
 
 if TYPE_CHECKING:
@@ -38,8 +39,8 @@ def _get_user_identity() -> tuple[str, str]:
     if token is None:
         return ("anonymous", "")
     return (
-        token.claims.get("preferred_username", "unknown"),
-        token.claims.get("oid", ""),
+        str(token.claims.get("preferred_username") or "unknown"),
+        str(token.claims.get("oid") or ""),
     )
 
 
@@ -47,18 +48,21 @@ def _build_auth(auth_cfg: AuthConfig) -> RemoteAuthProvider | None:
     """Build FastMCP auth provider from config. Returns None if auth disabled."""
     if not auth_cfg.tenant_id or not auth_cfg.client_id:
         return None
-    verifier = AzureJWTVerifier(
-        client_id=auth_cfg.client_id,
-        tenant_id=auth_cfg.tenant_id,
-        required_scopes=[auth_cfg.required_scope] if auth_cfg.required_scope else [],
-    )
-    return RemoteAuthProvider(
-        token_verifier=verifier,
-        authorization_servers=[
-            AnyHttpUrl(f"https://login.microsoftonline.com/{auth_cfg.tenant_id}/v2.0")
-        ],
-        base_url=auth_cfg.base_url,
-    )
+    try:
+        verifier = AzureJWTVerifier(
+            client_id=auth_cfg.client_id,
+            tenant_id=auth_cfg.tenant_id,
+            required_scopes=[auth_cfg.required_scope] if auth_cfg.required_scope else [],
+        )
+        return RemoteAuthProvider(
+            token_verifier=verifier,
+            authorization_servers=[
+                AnyHttpUrl(f"https://login.microsoftonline.com/{auth_cfg.tenant_id}/v2.0")
+            ],
+            base_url=auth_cfg.base_url,
+        )
+    except Exception as e:
+        raise ConfigError(f"Failed to initialize auth provider: {e}") from e
 
 
 def create_server(config: AppConfig) -> FastMCP:
@@ -87,8 +91,14 @@ def create_server(config: AppConfig) -> FastMCP:
             return
         token = get_access_token()
         if token is None:
-            return  # auth disabled
-        user_groups: list[str] = token.claims.get("groups") or []
+            raise ToolError("Access denied: authentication required")
+        raw = token.claims.get("groups")
+        if isinstance(raw, str):
+            user_groups: list[str] = [raw]
+        elif isinstance(raw, list):
+            user_groups = raw
+        else:
+            user_groups = []
         if not set(required) & set(user_groups):
             raise ToolError("Access denied: user is not in any required group")
 
@@ -99,13 +109,13 @@ def create_server(config: AppConfig) -> FastMCP:
         Returns dataset name, source label, and description for each dataset.
         """
         username, user_oid = _get_user_identity()
-        _check_groups()
         request_id = str(uuid.uuid4())
         start = time_mod.monotonic()
         status = "error"
         result_count = 0
         datasets: list[Any] = []
         try:
+            _check_groups()
             datasets = await client.list_datasets()
             result_count = len(datasets)
             status = "success"
@@ -118,7 +128,7 @@ def create_server(config: AppConfig) -> FastMCP:
                 "audit: list_datasets",
                 request_id=request_id,
                 user=_sanitize_log_str(username, max_len=100),
-                user_oid=user_oid,
+                user_oid=_sanitize_log_str(user_oid, max_len=100),
                 result_count=result_count,
                 duration_ms=round(duration_ms, 1),
                 status=status,
@@ -135,12 +145,12 @@ def create_server(config: AppConfig) -> FastMCP:
         if not dataset.strip():
             raise ToolError("dataset must not be empty")
         username, user_oid = _get_user_identity()
-        _check_groups()
         request_id = str(uuid.uuid4())
         start = time_mod.monotonic()
         status = "error"
         schema = None
         try:
+            _check_groups()
             schema = await client.get_dataset_schema(dataset)
             status = "success"
         except DatasetNotFoundError as e:
@@ -154,7 +164,7 @@ def create_server(config: AppConfig) -> FastMCP:
                 "audit: get_dataset_schema",
                 request_id=request_id,
                 user=_sanitize_log_str(username, max_len=100),
-                user_oid=user_oid,
+                user_oid=_sanitize_log_str(user_oid, max_len=100),
                 dataset=dataset,
                 source=_resolve_source_name(client, dataset),
                 duration_ms=round(duration_ms, 1),
@@ -182,12 +192,13 @@ def create_server(config: AppConfig) -> FastMCP:
             raise ToolError("apl must not be empty")
 
         username, user_oid = _get_user_identity()
-        _check_groups()
 
         if not limiter.acquire():
             retry = limiter.retry_after()
             logger.warning(
                 "Rate limit exceeded",
+                user=_sanitize_log_str(username, max_len=100),
+                user_oid=_sanitize_log_str(user_oid, max_len=100),
                 dataset=dataset,
                 retry_after_s=round(retry, 1),
             )
@@ -198,6 +209,7 @@ def create_server(config: AppConfig) -> FastMCP:
         status = "error"
         result_rows = 0
         try:
+            _check_groups()
             result = await client.query_apl(dataset, apl, cursor)
             result_rows = len(result.rows)
             status = "success"
@@ -212,7 +224,7 @@ def create_server(config: AppConfig) -> FastMCP:
                 "audit: query executed",
                 request_id=request_id,
                 user=_sanitize_log_str(username, max_len=100),
-                user_oid=user_oid,
+                user_oid=_sanitize_log_str(user_oid, max_len=100),
                 dataset=dataset,
                 apl_query=_sanitize_log_str(apl),
                 source=_resolve_source_name(client, dataset),
