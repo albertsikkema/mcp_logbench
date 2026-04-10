@@ -113,8 +113,20 @@ class AuthConfig(BaseModel):
     provider: Literal["azure_entra"] = "azure_entra"
     tenant_id: str = ""
     client_id: str = ""
+    base_url: str = ""
     required_scope: str | None = None
     required_groups: list[str] = []
+
+    @model_validator(mode="after")
+    def auth_fields_consistent(self) -> Self:
+        has_tenant = bool(self.tenant_id)
+        has_client = bool(self.client_id)
+        has_base_url = bool(self.base_url)
+        if has_tenant != has_client:
+            raise ValueError("tenant_id and client_id must both be set or both be empty")
+        if has_tenant and not has_base_url:
+            raise ValueError("base_url is required when authentication is enabled")
+        return self
 
 
 class AppConfig(BaseModel):

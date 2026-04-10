@@ -221,6 +221,105 @@ def test_invalid_yaml_raises(tmp_path: Path) -> None:
         load_config(cfg_path)
 
 
+# --- Auth config validation ---
+
+
+def test_auth_disabled_by_default(tmp_path: Path) -> None:
+    cfg_path = write_yaml(
+        tmp_path,
+        """
+axiom:
+  sources:
+    - name: prod
+      token: tok
+      org_id: org-1
+      datasets: [logs]
+""",
+    )
+    config = load_config(cfg_path)
+    assert config.auth.tenant_id == ""
+    assert config.auth.client_id == ""
+
+
+def test_auth_fully_configured_passes(tmp_path: Path) -> None:
+    cfg_path = write_yaml(
+        tmp_path,
+        """
+axiom:
+  sources:
+    - name: prod
+      token: tok
+      org_id: org-1
+      datasets: [logs]
+auth:
+  tenant_id: "my-tenant"
+  client_id: "my-client"
+  base_url: "https://server.example.com"
+""",
+    )
+    config = load_config(cfg_path)
+    assert config.auth.tenant_id == "my-tenant"
+    assert config.auth.client_id == "my-client"
+    assert config.auth.base_url == "https://server.example.com"
+
+
+def test_auth_tenant_without_client_raises(tmp_path: Path) -> None:
+    cfg_path = write_yaml(
+        tmp_path,
+        """
+axiom:
+  sources:
+    - name: prod
+      token: tok
+      org_id: org-1
+      datasets: [logs]
+auth:
+  tenant_id: "my-tenant"
+  base_url: "https://server.example.com"
+""",
+    )
+    with pytest.raises(ConfigError, match="validation failed"):
+        load_config(cfg_path)
+
+
+def test_auth_client_without_tenant_raises(tmp_path: Path) -> None:
+    cfg_path = write_yaml(
+        tmp_path,
+        """
+axiom:
+  sources:
+    - name: prod
+      token: tok
+      org_id: org-1
+      datasets: [logs]
+auth:
+  client_id: "my-client"
+  base_url: "https://server.example.com"
+""",
+    )
+    with pytest.raises(ConfigError, match="validation failed"):
+        load_config(cfg_path)
+
+
+def test_auth_enabled_without_base_url_raises(tmp_path: Path) -> None:
+    cfg_path = write_yaml(
+        tmp_path,
+        """
+axiom:
+  sources:
+    - name: prod
+      token: tok
+      org_id: org-1
+      datasets: [logs]
+auth:
+  tenant_id: "my-tenant"
+  client_id: "my-client"
+""",
+    )
+    with pytest.raises(ConfigError, match="validation failed"):
+        load_config(cfg_path)
+
+
 def test_config_path_from_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg_path = write_yaml(
         tmp_path,
