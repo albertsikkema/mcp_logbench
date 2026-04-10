@@ -10,6 +10,7 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.azure import AzureJWTVerifier
+from fastmcp.server.dependencies import get_access_token
 from loguru import logger
 from pydantic import AnyHttpUrl
 
@@ -29,6 +30,17 @@ _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 def _sanitize_log_str(s: str, max_len: int = 500) -> str:
     """Replace control characters and truncate for safe log output."""
     return _CONTROL_RE.sub(" ", s[:max_len])
+
+
+def _get_user_identity() -> tuple[str, str]:
+    """Extract (username, oid) from current request token."""
+    token = get_access_token()
+    if token is None:
+        return ("anonymous", "")
+    return (
+        token.claims.get("preferred_username", "unknown"),
+        token.claims.get("oid", ""),
+    )
 
 
 def _build_auth(auth_cfg: AuthConfig) -> RemoteAuthProvider | None:
@@ -69,12 +81,25 @@ def create_server(config: AppConfig) -> FastMCP:
         auth=auth,
     )
 
+    def _check_groups() -> None:
+        required = config.auth.required_groups
+        if not required:
+            return
+        token = get_access_token()
+        if token is None:
+            return  # auth disabled
+        user_groups: list[str] = token.claims.get("groups") or []
+        if not set(required) & set(user_groups):
+            raise ToolError("Access denied: user is not in any required group")
+
     @mcp.tool
     async def list_datasets() -> list[dict[str, str]]:
         """List all queryable datasets across all configured sources.
 
         Returns dataset name, source label, and description for each dataset.
         """
+        username, user_oid = _get_user_identity()
+        _check_groups()
         request_id = str(uuid.uuid4())
         start = time_mod.monotonic()
         status = "error"
@@ -92,8 +117,8 @@ def create_server(config: AppConfig) -> FastMCP:
             log_fn(
                 "audit: list_datasets",
                 request_id=request_id,
-                user="anonymous",  # TODO(T-004): replace with authenticated user identity
-                user_oid="",
+                user=_sanitize_log_str(username, max_len=100),
+                user_oid=user_oid,
                 result_count=result_count,
                 duration_ms=round(duration_ms, 1),
                 status=status,
@@ -109,6 +134,8 @@ def create_server(config: AppConfig) -> FastMCP:
         """
         if not dataset.strip():
             raise ToolError("dataset must not be empty")
+        username, user_oid = _get_user_identity()
+        _check_groups()
         request_id = str(uuid.uuid4())
         start = time_mod.monotonic()
         status = "error"
@@ -126,8 +153,8 @@ def create_server(config: AppConfig) -> FastMCP:
             log_fn(
                 "audit: get_dataset_schema",
                 request_id=request_id,
-                user="anonymous",  # TODO(T-004): replace with authenticated user identity
-                user_oid="",
+                user=_sanitize_log_str(username, max_len=100),
+                user_oid=user_oid,
                 dataset=dataset,
                 source=_resolve_source_name(client, dataset),
                 duration_ms=round(duration_ms, 1),
@@ -153,6 +180,9 @@ def create_server(config: AppConfig) -> FastMCP:
             raise ToolError("dataset must not be empty")
         if not apl.strip():
             raise ToolError("apl must not be empty")
+
+        username, user_oid = _get_user_identity()
+        _check_groups()
 
         if not limiter.acquire():
             retry = limiter.retry_after()
@@ -181,8 +211,8 @@ def create_server(config: AppConfig) -> FastMCP:
             log_fn(
                 "audit: query executed",
                 request_id=request_id,
-                user="anonymous",  # TODO(T-004): replace with authenticated user identity
-                user_oid="",
+                user=_sanitize_log_str(username, max_len=100),
+                user_oid=user_oid,
                 dataset=dataset,
                 apl_query=_sanitize_log_str(apl),
                 source=_resolve_source_name(client, dataset),
