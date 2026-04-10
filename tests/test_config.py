@@ -36,7 +36,7 @@ axiom:
     assert isinstance(config, AppConfig)
     assert config.axiom.sources[0].name == "prod"
     assert config.axiom.sources[0].token == "mytoken"
-    assert config.server.host == "0.0.0.0"
+    assert config.server.host == "127.0.0.1"
     assert config.server.port == 8080
 
 
