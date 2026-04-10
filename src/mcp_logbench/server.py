@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 import time as time_mod
+import uuid
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
@@ -18,6 +20,13 @@ from mcp_logbench.rate_limit import RateLimiter
 if TYPE_CHECKING:
     from mcp_logbench.config import AppConfig
 
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _sanitize_log_str(s: str, max_len: int = 500) -> str:
+    """Replace control characters and truncate for safe log output."""
+    return _CONTROL_RE.sub(" ", s[:max_len])
+
 
 def create_server(config: AppConfig) -> FastMCP:
     """Create and configure the FastMCP server with all tools."""
@@ -26,8 +35,10 @@ def create_server(config: AppConfig) -> FastMCP:
 
     @asynccontextmanager
     async def lifespan(app: Any):
+        logger.info("MCP LogBench server started")
         yield
         await client.aclose()
+        logger.info("MCP LogBench server stopped")
 
     mcp = FastMCP(
         "MCP LogBench",
@@ -41,10 +52,29 @@ def create_server(config: AppConfig) -> FastMCP:
 
         Returns dataset name, source label, and description for each dataset.
         """
+        request_id = str(uuid.uuid4())
+        start = time_mod.monotonic()
+        status = "error"
+        result_count = 0
+        datasets: list[Any] = []
         try:
             datasets = await client.list_datasets()
+            result_count = len(datasets)
+            status = "success"
         except AxiomError as e:
             raise ToolError(str(e)) from e
+        finally:
+            duration_ms = (time_mod.monotonic() - start) * 1000
+            log_fn = logger.warning if status == "error" else logger.info
+            log_fn(
+                "audit: list_datasets",
+                request_id=request_id,
+                user="anonymous",  # TODO(T-004): replace with authenticated user identity
+                user_oid="",
+                result_count=result_count,
+                duration_ms=round(duration_ms, 1),
+                status=status,
+            )
         return [d.model_dump() for d in datasets]
 
     @mcp.tool
@@ -56,12 +86,31 @@ def create_server(config: AppConfig) -> FastMCP:
         """
         if not dataset.strip():
             raise ToolError("dataset must not be empty")
+        request_id = str(uuid.uuid4())
+        start = time_mod.monotonic()
+        status = "error"
+        schema = None
         try:
             schema = await client.get_dataset_schema(dataset)
+            status = "success"
         except DatasetNotFoundError as e:
             raise ToolError(str(e)) from e
         except AxiomError as e:
             raise ToolError(str(e)) from e
+        finally:
+            duration_ms = (time_mod.monotonic() - start) * 1000
+            log_fn = logger.warning if status == "error" else logger.info
+            log_fn(
+                "audit: get_dataset_schema",
+                request_id=request_id,
+                user="anonymous",  # TODO(T-004): replace with authenticated user identity
+                user_oid="",
+                dataset=dataset,
+                source=_resolve_source_name(client, dataset),
+                duration_ms=round(duration_ms, 1),
+                status=status,
+            )
+        assert schema is not None
         return schema.model_dump()
 
     @mcp.tool
@@ -84,28 +133,35 @@ def create_server(config: AppConfig) -> FastMCP:
 
         if not limiter.acquire():
             retry = limiter.retry_after()
+            logger.warning(
+                "Rate limit exceeded",
+                dataset=dataset,
+                retry_after_s=round(retry, 1),
+            )
             raise ToolError(f"Rate limit exceeded. Try again in {retry:.1f} seconds.")
 
+        request_id = str(uuid.uuid4())
         start = time_mod.monotonic()
-        status = "success"
+        status = "error"
         result_rows = 0
         try:
             result = await client.query_apl(dataset, apl, cursor)
             result_rows = len(result.rows)
+            status = "success"
         except DatasetNotFoundError as e:
-            status = "error"
             raise ToolError(str(e)) from e
         except AxiomError as e:
-            status = "error"
             raise ToolError(str(e)) from e
         finally:
             duration_ms = (time_mod.monotonic() - start) * 1000
-            logger.info(
+            log_fn = logger.warning if status == "error" else logger.info
+            log_fn(
                 "audit: query executed",
-                user="anonymous",
+                request_id=request_id,
+                user="anonymous",  # TODO(T-004): replace with authenticated user identity
                 user_oid="",
                 dataset=dataset,
-                apl_query=apl[:500],
+                apl_query=_sanitize_log_str(apl),
                 source=_resolve_source_name(client, dataset),
                 duration_ms=round(duration_ms, 1),
                 result_rows=result_rows,

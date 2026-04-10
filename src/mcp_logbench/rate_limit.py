@@ -34,4 +34,4 @@ class RateLimiter:
         if self._tokens >= 1.0:
             return 0.0
         deficit = 1.0 - self._tokens
-        return deficit / self._rate if self._rate > 0 else 0.0
+        return deficit / self._rate if self._rate > 0 else float("inf")
