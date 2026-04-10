@@ -8,7 +8,10 @@ from typing import TYPE_CHECKING, Any
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
+from fastmcp.server.auth import RemoteAuthProvider
+from fastmcp.server.auth.providers.azure import AzureJWTVerifier
 from loguru import logger
+from pydantic import AnyHttpUrl
 
 from mcp_logbench.axiom import (
     AxiomClient,
@@ -18,7 +21,7 @@ from mcp_logbench.axiom import (
 from mcp_logbench.rate_limit import RateLimiter
 
 if TYPE_CHECKING:
-    from mcp_logbench.config import AppConfig
+    from mcp_logbench.config import AppConfig, AuthConfig
 
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -28,10 +31,29 @@ def _sanitize_log_str(s: str, max_len: int = 500) -> str:
     return _CONTROL_RE.sub(" ", s[:max_len])
 
 
+def _build_auth(auth_cfg: AuthConfig) -> RemoteAuthProvider | None:
+    """Build FastMCP auth provider from config. Returns None if auth disabled."""
+    if not auth_cfg.tenant_id or not auth_cfg.client_id:
+        return None
+    verifier = AzureJWTVerifier(
+        client_id=auth_cfg.client_id,
+        tenant_id=auth_cfg.tenant_id,
+        required_scopes=[auth_cfg.required_scope] if auth_cfg.required_scope else [],
+    )
+    return RemoteAuthProvider(
+        token_verifier=verifier,
+        authorization_servers=[
+            AnyHttpUrl(f"https://login.microsoftonline.com/{auth_cfg.tenant_id}/v2.0")
+        ],
+        base_url=auth_cfg.base_url,
+    )
+
+
 def create_server(config: AppConfig) -> FastMCP:
     """Create and configure the FastMCP server with all tools."""
     client = AxiomClient(config.axiom)
     limiter = RateLimiter(config.axiom.rate_limit)
+    auth = _build_auth(config.auth)
 
     @asynccontextmanager
     async def lifespan(app: Any):
@@ -44,6 +66,7 @@ def create_server(config: AppConfig) -> FastMCP:
         "MCP LogBench",
         mask_error_details=True,
         lifespan=lifespan,
+        auth=auth,
     )
 
     @mcp.tool
