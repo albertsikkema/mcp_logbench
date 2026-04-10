@@ -1,0 +1,27 @@
+# Version control
+.git/
+.gitignore
+
+# Tests and docs
+tests/
+docs/
+*.md
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.venv/
+
+# Dev tools
+.ruff_cache/
+.pytest_cache/
+
+# Secrets and env files
+.env
+.env.*
+
+# Claude/IDE
+.claude/
+memories/
