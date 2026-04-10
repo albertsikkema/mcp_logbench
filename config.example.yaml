@@ -27,5 +27,6 @@ auth:
   provider: azure_entra
   tenant_id: "${AZURE_TENANT_ID}"
   client_id: "${AZURE_CLIENT_ID}"
+  base_url: "https://your-server.example.com"
   required_scope: "api://your-app-id/.default"
   required_groups: []

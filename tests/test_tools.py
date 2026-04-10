@@ -149,6 +149,22 @@ async def test_query_apl_audit_log(
     assert "success" in audit_lines[0]
 
 
+# --- Security: fail-closed when groups required but no token ---
+
+
+async def test_groups_required_no_token_denied(app_config: AppConfig) -> None:
+    """When required_groups set but auth disabled (no token), access must be denied."""
+    from mcp_logbench.config import AuthConfig
+
+    cfg = app_config.model_copy(deep=True)
+    cfg.auth = AuthConfig(required_groups=["some-group"])
+    server = create_server(cfg)
+
+    async with Client(server) as client:
+        with pytest.raises(ToolError, match="authentication required"):
+            await client.call_tool("list_datasets", {})
+
+
 # --- Read-only invariant ---
 
 

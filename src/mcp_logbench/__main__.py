@@ -13,7 +13,13 @@ if __name__ == "__main__":
     logger.info("Starting MCP LogBench", host=config.server.host, port=config.server.port)
 
     if not config.auth.tenant_id or not config.auth.client_id:
-        logger.warning("Authentication not configured -- server is unauthenticated (see T-004)")
+        logger.warning("Authentication not configured -- server is unauthenticated")
+    else:
+        logger.info(
+            "Authentication enabled",
+            provider=config.auth.provider,
+            tenant_id=config.auth.tenant_id,
+        )
 
     server = create_server(config)
     server.run(transport="http", host=config.server.host, port=config.server.port)
