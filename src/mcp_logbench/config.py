@@ -71,6 +71,12 @@ class AxiomSourceConfig(BaseModel):
     def datasets_not_empty(cls, v: list[str]) -> list[str]:
         if len(v) == 0:
             raise ValueError("at least one dataset is required")
+        for name in v:
+            if not re.match(r"^[a-zA-Z0-9_-]+$", name):
+                raise ValueError(
+                    f"dataset name '{name}' must contain only alphanumeric"
+                    " characters, hyphens, and underscores"
+                )
         return v
 
     @field_validator("name")
